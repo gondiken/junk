@@ -1,8 +1,8 @@
 // Bump VERSION whenever app files change so installed copies update.
-const VERSION = 'chroma-loop-v1';
+const VERSION = 'chroma-loop-v2';
 const ASSETS = [
   './', 'index.html', 'style.css', 'manifest.webmanifest',
-  'js/game.js', 'js/levels.js',
+  'js/game.js', 'js/levels.js', 'js/scenes.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png',
 ];
 

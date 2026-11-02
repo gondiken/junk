@@ -1,9 +1,12 @@
 // Level data + generation. Pure functions, no DOM.
+import { SCENES, renderScene } from './scenes.js';
 
 export const PAL = {
   r: '#e63946', o: '#f77f00', y: '#ffd23f', g: '#57cc58', d: '#2d6a4f',
   b: '#3a86ff', c: '#4cc9f0', p: '#8e5bd8', k: '#ff8fab', w: '#f8f4e9',
   n: '#8d5a3b', x: '#2b2d42', s: '#a3acb9', t: '#f2c79b', m: '#b5179e',
+  B: '#23408e', L: '#bde0fe', G: '#b5e48c', N: '#5a3825', S: '#5c6370',
+  P: '#c8b6ff', T: '#2a9d8f', R: '#9d0208', Y: '#ffe27a',
 };
 
 // Hand-drawn sprites. '.' = empty (or bg color when a level adds a background).
@@ -84,7 +87,19 @@ const GENS = [
   ['Zigzag',  (x, y, P) => Math.floor((y + Math.abs((x % (2 * P.zz)) - P.zz)) / P.bw)],
 ];
 
+
 export const LEVEL_COUNT = 100;
+export const TIER_SIZE = 5;
+
+// Difficulty steps up every 5 levels.
+export function tierParams(t) {
+  return {
+    size: Math.min(30, 10 + Math.round(t * 1.25)),  // board edge: 10, 11, 13, 14, 15 ... 30
+    colors: Math.min(8, 3 + Math.floor((t + 1) / 2)), // 3, 4, 4, 5, 5 ... 8
+    cols: t < 2 ? 3 : t < 8 ? 4 : 5,                 // shooter columns
+    slots: t < 10 ? 5 : t < 15 ? 4 : 3,              // holding slots
+  };
+}
 
 export function rng(seed) {
   let a = seed >>> 0;
@@ -101,6 +116,60 @@ function shuffle(R, arr) {
   return arr;
 }
 
+// ---- level schedule ---------------------------------------------------------
+
+const keyCount = keys => new Set(keys.filter(Boolean)).size;
+const SPRITE_INFO = SPRITES.map(sp => {
+  const w = Math.max(...sp.map.map(r => r.length)), h = sp.map.length;
+  return { w, h, colors: new Set(sp.map.join('').replace(/\./g, '')).size + (sp.bg ? 1 : 0) };
+});
+const SCENE_COLORS = SCENES.map(sc => keyCount(renderScene(sc, 32, 32)));
+
+// Decides, once, what each level shows. Every 5 levels: 3-4 pictures + 1 pattern.
+const SCHEDULE = (() => {
+  const R = rng(4242);
+  const uses = new Map();
+  const out = [];
+  let lastGen = -1;
+  for (let n = 0; n < LEVEL_COUNT; n++) {
+    const t = Math.floor(n / TIER_SIZE), P = tierParams(t), i = n % TIER_SIZE;
+    if (n === 0 || i === 2) {
+      let gen;
+      // plain bands/checks only in early tiers
+      do { gen = n === 0 ? 0 : Math.floor(R() * GENS.length); } while (n > 0 && (gen === lastGen || (t >= 4 && (gen === 0 || gen === 2))));
+      lastGen = gen;
+      out.push({ kind: 'pattern', gen, size: P.size, colors: n === 0 ? 2 : Math.min(P.colors, 6) });
+      continue;
+    }
+    const cands = [];
+    SPRITE_INFO.forEach((info, idx) => {
+      const scale = Math.max(info.w, info.h) * 2 <= P.size ? 2 : 1;
+      const w = info.w * scale, h = info.h * scale;
+      if (Math.max(w, h) > P.size + 4) return;
+      const needBg = !SPRITES[idx].bg && info.colors < P.colors;
+      const colors = info.colors + (needBg ? 1 : 0);
+      if (colors > P.colors) return;
+      if (!needBg && Math.max(w, h) < P.size - 3) return; // too small for this tier
+      if (Math.max(w, h) < P.size * 0.6) return;        // would float in a sea of background
+      cands.push({ kind: 'sprite', idx, scale, bg: needBg, colors });
+    });
+    if (P.size >= 13) SCENES.forEach((sc, idx) => {
+      if (SCENE_COLORS[idx] > Math.min(8, P.colors + 1)) return;
+      cands.push({ kind: 'scene', idx, colors: SCENE_COLORS[idx] });
+    });
+    let best = null, bestScore = Infinity;
+    for (const c of cands) {
+      const id = c.kind + c.idx, u = uses.get(id) || 0;
+      const score = Math.abs(P.colors - c.colors) + u * 4 + (c.kind === 'scene' ? -1.5 : t >= 4 ? 3 : 0) + R() * 0.8;
+      if (score < bestScore) { bestScore = score; best = c; }
+    }
+    const id = best.kind + best.idx, u = uses.get(id) || 0;
+    uses.set(id, u + 1);
+    out.push({ ...best, size: P.size, mirror: u % 2 === 1 });
+  }
+  return out;
+})();
+
 // ---- grid building ----------------------------------------------------------
 
 function keysToGrid(keys, w, h, name) {
@@ -116,28 +185,28 @@ function keysToGrid(keys, w, h, name) {
   return { name, w, h, cells, colors: colorKeys.map(k => PAL[k]) };
 }
 
-function spriteGrid(sp, scale, bg, pad) {
+function spriteGrid(sp, scale, bg, minSize, mirror) {
   const w0 = Math.max(...sp.map.map(r => r.length)), h0 = sp.map.length;
-  const w = w0 * scale + pad * 2, h = h0 * scale + pad * 2;
+  const sw = w0 * scale, sh = h0 * scale;
+  const w = bg ? Math.max(sw, minSize) : sw, h = bg ? Math.max(sh, minSize) : sh;
+  const ox = Math.floor((w - sw) / 2), oy = Math.floor((h - sh) / 2);
   const keys = new Array(w * h).fill(bg || null);
   for (let y = 0; y < h0; y++) for (let x = 0; x < w0; x++) {
-    const ch = sp.map[y][x] || '.';
+    const ch = sp.map[y][mirror ? w0 - 1 - x : x] || '.';
     const k = ch === '.' ? (bg || null) : ch;
     for (let sy = 0; sy < scale; sy++) for (let sx = 0; sx < scale; sx++)
-      keys[(pad + y * scale + sy) * w + pad + x * scale + sx] = k;
+      keys[(oy + y * scale + sy) * w + ox + x * scale + sx] = k;
   }
   return keysToGrid(keys, w, h, sp.name);
 }
 
-function procGrid(n, R) {
-  const size = Math.min(9 + Math.floor(n / 5), 26);
+function procGrid(n, gi, size, k, R) {
   const w = size, h = size + (R() < 0.4 ? 2 : 0);
-  const k = Math.min(2 + Math.floor(n / 14), 5);
   const pal = shuffle(R, pick(R, PALETTES).slice()).slice(0, k);
-  const [gname, fn] = GENS[n < 3 ? [0, 2, 3][n] : Math.floor(n / 2) % GENS.length];
+  const [gname, fn] = GENS[gi];
   const P = {
     k, cx: (w - 1) / 2, cy: (h - 1) / 2, R: Math.min(w, h) / 2,
-    bw: Math.max(1, Math.round(size / (4 + R() * 4))),
+    bw: Math.max(1, Math.min(Math.floor(size / (k + 1)), Math.round(size / (4 + R() * 4)))),
     rays: (k - 1) * (2 + Math.floor(R() * 3)) || 6,
     a: 0.2 + R() * 0.4, b: 0.2 + R() * 0.4, c: 0.1 + R() * 0.3,
     amp: 1 + R() * 3, zz: 2 + Math.floor(R() * 4),
@@ -156,21 +225,20 @@ function procGrid(n, R) {
 }
 
 export function levelGrid(n) {
+  const e = SCHEDULE[n];
   const R = rng(n * 7919 + 13);
-  if (n < 3 || n % 2 === 1) return procGrid(n, R);
-  const si = (n / 2 - 1) % SPRITES.length;
-  const sp = SPRITES[si];
-  const dim = Math.max(sp.map.length, ...sp.map.map(r => r.length));
-  const round = Math.floor((n / 2 - 1) / SPRITES.length); // 0, 1, 2, ...
-  const scale = round >= 1 && dim * 2 + 2 <= 30 ? 2 : 1;
-  let bg = sp.bg || null;
-  if (!bg && n >= 16) {
-    const used = new Set(sp.map.join('').split(''));
-    bg = pick(R, ['b', 'c', 'w', 'x', 'k', 'g', 'y', 's', 'p'].filter(c => !used.has(c)));
+  if (e.kind === 'pattern') return procGrid(n, e.gen, e.size, e.colors, R);
+  if (e.kind === 'scene') {
+    const sc = SCENES[e.idx];
+    return keysToGrid(renderScene(sc, e.size, e.size, e.mirror), e.size, e.size, sc.name);
   }
-  const pad = bg && n >= 16 ? (scale === 2 ? 1 : 2) : 0;
-  const spr = round >= 2 ? { ...sp, map: sp.map.map(r => r.padEnd(Math.max(...sp.map.map(q => q.length)), '.').split('').reverse().join('')) } : sp;
-  return spriteGrid(spr, scale, bg, pad);
+  const sp = SPRITES[e.idx];
+  let bg = sp.bg || null;
+  if (e.bg) {
+    const used = new Set(sp.map.join('').split(''));
+    bg = pick(R, ['b', 'c', 'w', 'x', 'k', 'g', 'y', 's', 'p', 'L', 'G', 'P'].filter(c => !used.has(c)));
+  }
+  return spriteGrid(sp, e.scale, bg, e.size, e.mirror);
 }
 
 // ---- line-of-sight helpers (shared with the game) ----------------------------
@@ -208,14 +276,16 @@ function simLoop(cells, w, h, color, ammo) {
   return { shots, ammo };
 }
 
-// Greedy sequential playthrough: proves a level can be cleared.
-function solvable(g, columns, slotCount) {
+// Greedy sequential playthrough: proves a level can be cleared and measures how
+// much it leaned on the holding slots (a rough difficulty score).
+function solve(g, columns, slotCount) {
   const { w, h } = g;
   const cells = Int16Array.from(g.cells);
   let left = cells.reduce((a, v) => a + (v >= 0), 0);
   const cols = columns.map(c => c.map(s => ({ ...s })));
   const slots = [];
-  for (let step = 0; step < 4000 && left > 0; step++) {
+  let maxSlots = 0, parks = 0;
+  for (let step = 0; step < 5000 && left > 0; step++) {
     let best = null, bestShots = 0;
     slots.forEach((s, i) => {
       const r = simLoop(cells.slice(), w, h, s.color, s.ammo);
@@ -234,17 +304,19 @@ function solvable(g, columns, slotCount) {
       if (best.slot !== undefined) { if (sh.ammo === 0) slots.splice(best.slot, 1); }
       else { cols[best.col].shift(); if (sh.ammo > 0) slots.push(sh); }
     } else {
-      if (slots.length >= slotCount) return false;
+      if (slots.length >= slotCount) return { ok: false };
       const j = cols.findIndex(c => c.length > 0);
-      if (j < 0) return false;
-      slots.push(cols[j].shift());
+      if (j < 0) return { ok: false };
+      slots.push(cols[j].shift()); parks++;
     }
+    maxSlots = Math.max(maxSlots, slots.length);
   }
-  return left === 0;
+  return { ok: left === 0, score: maxSlots + parks * 0.5 };
 }
 
 export function buildLevel(n) {
   const g = levelGrid(n);
+  const t = Math.floor(n / TIER_SIZE), TP = tierParams(t);
   const R = rng(n * 104729 + 7);
   const counts = new Array(g.colors.length).fill(0);
   for (const v of g.cells) if (v >= 0) counts[v]++;
@@ -261,19 +333,29 @@ export function buildLevel(n) {
       cnt -= a;
     }
   });
-  const nc = shooters.length <= 9 ? 3 : 4;
-  const slots = 5;
+  const nc = Math.max(3, Math.min(TP.cols, Math.floor(shooters.length / 2)));
 
-  let columns = null;
-  for (let attempt = 0; attempt < 60; attempt++) {
-    const order = shuffle(R, shooters.slice());
-    const cols = Array.from({ length: nc }, () => []);
-    order.forEach((s, i) => cols[i % nc].push({ ...s }));
-    columns = cols;
-    if (solvable(g, cols, slots)) break;
+  // Try several shuffles; early tiers keep the easiest solvable one, later tiers the hardest.
+  let slots = TP.slots, columns = null;
+  for (; slots <= 6 && !columns; slots++) {
+    let bestScore = null;
+    for (let attempt = 0, found = 0; attempt < 40 && found < 5; attempt++) {
+      const order = shuffle(R, shooters.slice());
+      const cols = Array.from({ length: nc }, () => []);
+      order.forEach((s, i) => cols[i % nc].push({ ...s }));
+      const res = solve(g, cols, slots);
+      if (!res.ok) continue;
+      found++;
+      const better = bestScore === null || (t < 2 ? res.score < bestScore : res.score > bestScore);
+      if (better) { bestScore = res.score; columns = cols; }
+    }
+    if (columns) break;
   }
-  return { n, name: g.name, w: g.w, h: g.h, cells: g.cells, colors: g.colors, columns, slots, capacity: 5, total };
+  if (!columns) { // practically unreachable: deal in color order
+    columns = Array.from({ length: nc }, () => []);
+    shooters.forEach((s, i) => columns[i % nc].push({ ...s }));
+  }
+  return { n, tier: t, name: g.name, w: g.w, h: g.h, cells: g.cells, colors: g.colors, columns, slots, capacity: 5, total };
 }
 
-// Exposed for the test script.
-export const _internal = { solvable };
+export const _internal = { solve };

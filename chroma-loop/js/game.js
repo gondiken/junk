@@ -1,4 +1,4 @@
-import { buildLevel, levelGrid, LEVEL_COUNT, firstCell, exposedColors } from './levels.js';
+import { buildLevel, levelGrid, LEVEL_COUNT, TIER_SIZE, tierParams, firstCell, exposedColors } from './levels.js';
 
 const $ = s => document.querySelector(s);
 const canvas = $('#game');
@@ -193,16 +193,27 @@ function burst(x, y, color, n, spd, size) {
   }
 }
 
+// Describe what gets harder when the next level starts a new tier.
+function levelUpText(next) {
+  if (next >= LEVEL_COUNT || next % TIER_SIZE !== 0) return '';
+  const a = tierParams(next / TIER_SIZE - 1), b = tierParams(next / TIER_SIZE), ch = [];
+  if (b.size > a.size) ch.push(`bigger pictures (${b.size}×${b.size})`);
+  if (b.colors > a.colors) ch.push(`up to ${b.colors} colors`);
+  if (b.cols > a.cols) ch.push(`${b.cols} shooter columns`);
+  if (b.slots < a.slots) ch.push(`only ${b.slots} holding slots`);
+  return ch.length ? `\n\nLevel up! Next: ${ch.join(', ')}.` : '';
+}
+
 function endLevel(won, reason) {
   if (S.status !== 'play') return;
   S.status = won ? 'won' : 'lost';
   setTimeout(() => {
     if (won) {
-      const stars = S.maxSlotsUsed <= 1 ? 3 : S.maxSlotsUsed <= 3 ? 2 : 1;
+      const stars = S.maxSlotsUsed <= 1 ? 3 : S.maxSlotsUsed <= S.slots.length - 2 ? 2 : 1;
       save.stars[S.n] = Math.max(save.stars[S.n] || 0, stars);
       save.unlocked = Math.max(save.unlocked, Math.min(LEVEL_COUNT, S.n + 2));
       persist(); sfx.win(); buzz([20, 40, 20]);
-      showModal('Cleared!', `${S.L.name} complete`, stars, S.n + 1 < LEVEL_COUNT ? 'Next' : 'Replay',
+      showModal('Cleared!', `${S.L.name} complete.${levelUpText(S.n + 1)}`, stars, S.n + 1 < LEVEL_COUNT ? 'Next' : 'Replay',
         () => startLevel(S.n + 1 < LEVEL_COUNT ? S.n + 1 : S.n));
     } else {
       sfx.lose(); buzz(80);
@@ -341,7 +352,7 @@ function drawShooter(x, y, r, color, ammo, ang = null, alpha = 1, recoil = 0, di
   ctx.lineJoin = 'round'; ctx.lineWidth = r * 0.2; ctx.strokeStyle = 'rgba(20,18,35,.85)';
   ctx.strokeText(ammo, 0, r * 0.42);
   ctx.fillStyle = '#fff'; ctx.fillText(ammo, 0, r * 0.42);
-  if (dim) { ctx.fillStyle = 'rgba(30,26,50,.45)'; rr(-r, -r * 1.1, r * 2, r * 2.1, r * 0.62); ctx.fill(); }
+  if (dim) { ctx.fillStyle = 'rgba(30,26,50,.3)'; rr(-r, -r * 1.1, r * 2, r * 2.1, r * 0.62); ctx.fill(); }
   ctx.restore();
 }
 

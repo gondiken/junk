@@ -40,7 +40,7 @@ button.primary { background: #ff8a3d; box-shadow: 0 4px 0 #b4561b; padding: 0 28
 }
 .card h2 { margin: 0 0 6px; font-size: 28px; }
 .card ul { text-align: left; padding-left: 20px; line-height: 1.45; font-size: 15px; }
-.card p { opacity: .85; }
+.card p { opacity: .85; white-space: pre-line; }
 .bigstars { font-size: 40px; color: #ffd23f; letter-spacing: 6px; min-height: 0; }
 @keyframes pop { from { transform: scale(.85); opacity: 0; } to { transform: none; opacity: 1; } }
 
